@@ -137,8 +137,6 @@ END_EXTERN_C
 #define PL_XPosix_ptrs		(*Perl_GXPosix_ptrs_ptr(NULL))
 #undef  PL_appctx
 #define PL_appctx		(*Perl_Gappctx_ptr(NULL))
-#undef  PL_check
-#define PL_check		(*Perl_Gcheck_ptr(NULL))
 #undef  PL_check_mutex
 #define PL_check_mutex		(*Perl_Gcheck_mutex_ptr(NULL))
 #undef  PL_csighandlerp
