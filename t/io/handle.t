@@ -5,6 +5,7 @@ BEGIN {
     require './test.pl';
     set_up_inc('../lib');
     skip_all_if_miniperl("miniperl can't load IO::File");
+    skip_all_without_config('useithreads');
 }
 
 $|  = 1;
