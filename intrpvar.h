@@ -815,6 +815,42 @@ PERLVARI(I, dump_re_max_len, STRLEN, 60)
 
 PERLVAR(I, internal_random_state, PL_RANDOM_STATE_TYPE)
 
+PERLVARI(I, AboveLatin1,	SV *, NULL)
+PERLVARI(I, Assigned_invlist, SV *, NULL)
+PERLVARI(I, GCB_invlist, SV *, NULL)
+PERLVARI(I, HasMultiCharFold,   SV *, NULL)
+PERLVARI(I, InMultiCharFold,   SV *, NULL)
+PERLVARI(I, Latin1,	SV *, NULL)
+PERLVARI(I, LB_invlist, SV *, NULL)
+PERLVARI(I, NonFinalFold, SV *, NULL)
+PERLVARI(I, SB_invlist, SV *, NULL)
+PERLVARI(I, SCX_invlist, SV *, NULL)
+PERLVARI(I, UpperLatin1,	SV *, NULL)   /* Code points 128 - 255 */
+
+/* List of characters that participate in any fold defined by Unicode */
+PERLVARI(I, in_some_fold, SV *, NULL)
+
+PERLVARI(I, utf8_idcont,	SV *, NULL)
+PERLVARI(I, utf8_idstart, SV *, NULL)
+PERLVARI(I, utf8_perl_idcont, SV *, NULL)
+PERLVARI(I, utf8_perl_idstart, SV *, NULL)
+PERLVARI(I, utf8_xidcont, SV *, NULL)
+PERLVARI(I, utf8_xidstart, SV *, NULL)
+PERLVARI(I, WB_invlist, SV *, NULL)
+PERLVARA(I, XPosix_ptrs, POSIX_CC_COUNT, SV *)
+PERLVARA(I,  Posix_ptrs, POSIX_CC_COUNT, SV *)
+PERLVARI(I, utf8_toupper, SV *, NULL)
+PERLVARI(I, utf8_totitle, SV *, NULL)
+PERLVARI(I, utf8_tolower, SV *, NULL)
+PERLVARI(I, utf8_tofold,	SV *, NULL)
+PERLVARI(I, utf8_tosimplefold,	SV *, NULL)
+PERLVARI(I, utf8_charname_begin, SV *, NULL)
+PERLVARI(I, utf8_charname_continue, SV *, NULL)
+PERLVARI(I, utf8_mark,	SV *, NULL)
+PERLVARI(I, InBitmap,	SV *, NULL)
+PERLVARI(I, CCC_non0_non230,	SV *, NULL)
+PERLVARI(I, Private_Use,	SV *, NULL)
+
 /* If you are adding a U8 or U16, check to see if there are 'Space' comments
  * above on where there are gaps which currently will be structure padding.  */
 
