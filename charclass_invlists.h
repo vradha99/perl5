@@ -6,6 +6,22 @@
 
 /* See the generating file for comments */
 
+/* This gives the number of code points that can be in the bitmap of an ANYOF
+ * node.  The shift number must currently be one of: 8..12.  It can't be less
+ * than 8 (256) because some code relies on it being at least that.  Above 12
+ * (4096), and you start running into warnings that some data structure widths
+ * have been exceeded, though the test suite as of this writing still passes
+ * for up through 16, which is as high as anyone would ever want to go,
+ * encompassing all of the Unicode BMP, and thus including all the economically
+ * important world scripts.  At 12 most of them are: including Arabic,
+ * Cyrillic, Greek, Hebrew, Indian subcontinent, Latin, and Thai; but not Han,
+ * Japanese, nor Korean.  (The regarglen structure in regnodes.h is a U8, and
+ * the trie types TRIEC and AHOCORASICKC are larger than U8 for shift values
+ * above 12.)  Be sure to benchmark before changing, as larger sizes do
+ * significantly slow down the test suite */
+
+#define NUM_ANYOF_CODE_POINTS   (1 << 8)
+
 
 #if (defined(PERL_IN_REGCOMP_C) && ! defined(PERL_IN_XSUB_RE))
 
@@ -29367,6 +29383,15 @@ static const GCB_enum _Perl_GCB_invmap[] = {  /* for EBCDIC 037 */
 #endif	/* defined(PERL_IN_REGEXEC_C) */
 
 #if (defined(PERL_IN_REGCOMP_C) && ! defined(PERL_IN_XSUB_RE))
+
+static const UV _Perl_InBitmap_invlist[] = {  /* for all charsets */
+	2,	/* Number of elements */
+	148565664, /* Version and data structure type */
+	0,	/* 0 if the list starts at 0;
+		   1 if it starts at the element beyond 0 */
+	0x0,
+	0x100
+};
 
 #  if 'A' == 65 /* ASCII/Latin1 */
 
@@ -395305,5 +395330,5 @@ static const U8 WB_table[23][23] = {
  * a712c758275b460d18fa77a26ed3589689bb3f69dcc1ea99b913e32db92a5cd2 lib/unicore/version
  * 2680b9254eb236c5c090f11b149605043e8c8433661b96efc4a42fb4709342a5 regen/charset_translations.pl
  * 03e51b0f07beebd5da62ab943899aa4934eee1f792fa27c1fb638c33bf4ac6ea regen/mk_PL_charclass.pl
- * 61ea8132bb9ea5c637609e2d026b0b85ce17d6bec544c2f08ce411e6f65e8386 regen/mk_invlists.pl
+ * eeb419293bc4fed3c653e3f41c9b7a889019e2134dc892b7bf669ccdcbeb869b regen/mk_invlists.pl
  * ex: set ro: */
