@@ -2279,10 +2279,454 @@ Perl_unlnk(pTHX_ const char *f)	/* unlink all versions of a file */
 }
 #endif
 
+#if (defined(__GLIBC__) || defined(__FreeBSD__)) && \
+    (defined(HAS_FCNTL) || !defined(F_SETFD))
+#  define USE_POSIX_SPAWN 1
+#  include <spawn.h>
+#endif
+
+#if defined(USE_POSIX_SPAWN)
+struct popen_pipe {
+    posix_spawn_file_actions_t fa;
+    const char *mode;
+    I32 This;
+    I32 that;
+    int p[2];
+};
+
+/* returns errno on failure, 0 on success */
+static int popen_pipe_prepare(pTHX_ struct popen_pipe *ppipe, const char *mode)
+{
+    I32 This = ppipe->This = (*mode == 'w');
+    I32 that = ppipe->that = !This;
+    int *p = ppipe->p;
+    int err;
+
+    if (PerlProc_pipe_cloexec(p) < 0)
+	return errno;
+
+    ppipe->mode = mode;
+    err = posix_spawn_file_actions_init(&ppipe->fa);
+
+    /*
+     * order matters, we need to do this adddup2 before the adddup2
+     * for "2>&1" in do_posix_spawn_popen
+     */
+    if (!err) {
+	/* in case somebody closes STDIN or STDOUT */
+	if (p[that] != that)
+	    err = posix_spawn_file_actions_adddup2(&ppipe->fa, p[that], that);
+	else
+	    setfd_cloexec_or_inhexec_by_sysfdness(p[that]);
+	if (!err)
+	    err = posix_spawn_file_actions_addclose(&ppipe->fa, p[This]);
+	if (err)
+	    posix_spawn_file_actions_destroy(&ppipe->fa);
+    }
+
+    if (err) {
+	PerlLIO_close(p[0]);
+	PerlLIO_close(p[1]);
+	SETERRNO(err, 0); /* ENOMEM */
+    }
+    return err;
+}
+
+static PerlIO *
+one_io_from_pipe(pTHX_ const char *mode, int p[2], Pid_t pid)
+{
+    SV *sv;
+    I32 This = (*mode == 'w');
+    I32 that = !This;
+
+    /* Keep the lower of the two fd numbers */
+    if (p[that] < p[This]) {
+	PerlLIO_dup2_cloexec(p[This], p[that]);
+	PerlLIO_close(p[This]);
+	p[This] = p[that];
+    }
+    else
+	PerlLIO_close(p[that]);		/* close child's end of pipe */
+
+    sv = *av_fetch(PL_fdpid, p[This], TRUE);
+    SvUPGRADE(sv, SVt_IV);
+    SvIV_set(sv, pid);
+    PL_forkprocess = pid;
+
+    return PerlIO_fdopen(p[This], mode);
+}
+
+static void
+popen_pipe_abort(pTHX_ struct popen_pipe *ppipe)
+{
+    posix_spawn_file_actions_destroy(&ppipe->fa);
+    PerlLIO_close(ppipe->p[0]);
+    PerlLIO_close(ppipe->p[1]);
+}
+
+/*
+ * Emulate execvp(3) behavior on ENOEXEC by using /bin/sh to run the
+ * file.  posix_spawnp(3) does NOT specify this and glibc stopped
+ * supporting it in 2.15
+ */
+int
+Perl_do_posix_spawnp_sh(Pid_t *pid, const char *file,
+			const posix_spawn_file_actions_t *fa,
+			const posix_spawnattr_t *attr,
+			const char **argv)
+{
+    int err, eacces = 0;
+    const char **sh_arg;
+    Size_t nr, argc;
+
+    for (argc = 0; argv[argc]; argc++) {
+	if (argc == INT_MAX - 1)
+	    return E2BIG;
+    }
+    nr = argc > 1 ? argc + 2 : 3;
+    sh_arg = (const char **)safemalloc(nr * sizeof(char *));
+    if (!sh_arg)
+	return ENOMEM;
+
+    sh_arg[0] = PL_sh_path;
+    if (argc > 1)
+	memcpy(sh_arg + 2, argv + 1, argc * sizeof(char *));
+    else
+	sh_arg[2] = NULL;
+
+    if (strchr(file, '/')) {
+	sh_arg[1] = file;
+	err = posix_spawn(pid, sh_arg[0], fa, attr, EXEC_ARGV_CAST(sh_arg),
+			  environ);
+    }
+    else { /* try to find a script (sh_arg[1]) to pass to /bin/sh */
+	const char *env_path = PerlEnv_getenv("PATH");
+	char *path_buf = NULL;
+	Size_t file_len = strlen(file);
+	err = ENOENT;
+
+	/*
+	 * confstr(3) appeared in POSIX.1-2001, same as posix_spawn(3),
+	 * so it's expected to be available if posix_spawn is.
+	 */
+	if (!env_path) {
+	    size_t len = confstr(_CS_PATH, NULL, 0);
+
+	    /*
+	     * AFAIK, confstr(3) always returns a hard-coded string which
+	     * can't be influenced by other threads, so no TOCTOU race
+	     * between getting the length above and using it, below:
+	     */
+	    if (len) {
+		path_buf = (char *)safemalloc(len);
+		if (path_buf) {
+		    confstr(_CS_PATH, path_buf, len);
+		    env_path = path_buf;
+		}
+	    }
+	}
+	if (env_path) {
+	    char *buffer = (char *)safemalloc(strlen(env_path) + file_len + 2);
+	    const char *p, *pe;
+	    char *x;
+	    size_t xlen;
+	    int done = 0;
+
+	    for (p = env_path; !done; p = pe) {
+		pe = strchr(p, ':');
+		if (!pe) {
+		    pe = p + strlen(p) + 1;
+		    assert(*pe == 0);
+		}
+
+		xlen = pe - p;
+		x = (char *)memcpy(buffer, p, xlen) + xlen;
+		*x++ = '/';
+		memcpy(x, file, file_len + 1);
+
+		/*
+		 * this access() -> posix_spawn() chain has a TOCTOU race,
+		 * but it should not be a problem in practice (we already
+		 * do path tainting checks).  Only way to get rid of TOCTOU
+		 * is to (vfork|clone|fork) and execve ourselves (or get the
+		 * /bin/sh fallback added to POSIX and wait a few decades)
+		 */
+		err = access(buffer, X_OK);
+		if (err) {
+		    switch (errno) {
+		    case EACCES:
+			eacces = 1;
+			/* fall-through */
+		    case ELOOP:
+		    case ENOENT:
+		    case ESTALE:
+		    case ENOTDIR:
+		    case ENODEV:
+		    case ENAMETOOLONG:
+			break; /* keep trying */
+		    default:
+			err = errno;
+			done = 1;
+		    }
+		} else {
+		    sh_arg[1] = buffer;
+		    err = posix_spawn(pid, sh_arg[0], fa, attr,
+				    EXEC_ARGV_CAST(sh_arg), environ);
+		    done = 1;
+		}
+		pe++; /* skip the ':' */
+	    }
+	    safefree(buffer);
+	}
+	safefree(path_buf);
+    }
+    safefree(sh_arg);
+    if (err && eacces)
+	err = EACCES;
+    return err;
+}
+
+static PerlIO *
+popen_pipe_spawn(pTHX_ const char *file, struct popen_pipe *ppipe,
+			const char **argv)
+{
+    Pid_t pid;
+    int err;
+    const posix_spawnattr_t *attr = NULL;
+    const posix_spawn_file_actions_t *fa = &ppipe->fa;
+
+again:
+    PERL_FPU_PRE_EXEC
+    err = posix_spawnp(&pid, file, fa, attr, EXEC_ARGV_CAST(argv), environ);
+    PERL_FPU_POST_EXEC
+    if (err) {
+	if (err == EAGAIN) {
+	    Perl_ck_warner(aTHX_ packWARN(WARN_PIPE),
+			    "Can't fork, trying again in 5 seconds");
+	    sleep(5);
+	    goto again;
+	}
+
+	if (err == ENOEXEC)
+	    err = Perl_do_posix_spawnp_sh(&pid, file, &ppipe->fa, attr, argv);
+	if (err) {
+	    SETERRNO(err, 0);
+	    return NULL;
+	}
+    }
+    posix_spawn_file_actions_destroy(&ppipe->fa);
+    return one_io_from_pipe(aTHX_ ppipe->mode, ppipe->p, pid);
+}
+
+static PerlIO *
+do_posix_spawn_popen_list(pTHX_ const char *mode, int n, SV **args)
+{
+    SV **mark = args - 1;
+    SV **sp = args - 1 + n;
+    PerlIO *io = NULL;
+    struct popen_pipe ppipe;
+    int err;
+
+    PERL_ARGS_ASSERT_MY_POPEN_LIST;
+
+    PERL_FLUSHALL_FOR_CHILD;
+    if (TAINTING_get) {
+	taint_env();
+	taint_proper("Insecure %s%s", "EXEC");
+    }
+    assert(sp >= mark);
+    err = popen_pipe_prepare(aTHX_ &ppipe, mode);
+    if (err)
+	return NULL;
+
+    ENTER;
+    {
+	const char **argv, **a;
+
+	Newx(argv, sp - mark + 1, const char *);
+	SAVEFREEPV(argv);
+	a = argv;
+
+	while (++mark <= sp) {
+	    if (*mark) {
+		char *arg = savepv(SvPV_nolen_const(*mark));
+		SAVEFREEPV(arg);
+		*a++ = arg;
+	    } else
+		*a++ = "";
+	}
+	*a = NULL;
+	io = popen_pipe_spawn(aTHX_ argv[0], &ppipe, argv);
+    }
+    LEAVE;
+
+    if (!io)
+	popen_pipe_abort(aTHX_ &ppipe);
+
+    return io;
+}
+
+static PerlIO *
+do_posix_spawn_popen(pTHX_ const char *incmd, const char *mode)
+{
+    dVAR;
+    PerlIO *io = NULL;
+    const char *sh_arg[4];
+    const char **argv, **a;
+    char *s;
+    char *buf;
+    char *cmd;
+    /* Make a copy so we can change it */
+    const Size_t cmdlen = strlen(incmd) + 1;
+    int err;
+    struct popen_pipe ppipe;
+
+    if (TAINTING_get) {
+	taint_env();
+	taint_proper("Insecure %s%s", "EXEC");
+    }
+    err = popen_pipe_prepare(aTHX_ &ppipe, mode);
+    if (err)
+	return NULL;
+
+    /* lots of duplicated code from Perl_do_exec3 */
+    ENTER;
+    Newx(buf, cmdlen, char);
+    SAVEFREEPV(buf);
+    cmd = buf;
+    memcpy(cmd, incmd, cmdlen);
+
+    while (*cmd && isSPACE(*cmd))
+	cmd++;
+
+    /* save an extra exec if possible */
+#ifdef CSH
+    {
+#define PERL_FLAGS_MAX 10
+	char flags[PERL_FLAGS_MAX];
+	if (strnEQ(cmd, PL_cshname, PL_cshlen) &&
+		strBEGINs(cmd + PL_cshlen, " -c")) {
+	    my_strlcpy(flags, "-c", PERL_FLAGS_MAX);
+	    s = cmd + PL_cshlen+3;
+	    if (*s == 'f') {
+		s++;
+		my_strlcat(flags, "f", PERL_FLAGS_MAX - 2);
+	    }
+	    if (*s == ' ')
+		  s++;
+	    if (*s++ == '\'') {
+		char * const ncmd = s;
+
+		while (*s)
+		    s++;
+		if (s[-1] == '\n')
+		    *--s = '\0';
+		if (s[-1] == '\'') {
+		    const char *arg[4];
+		    arg[0] = "csh";
+		    arg[1] = flags;
+		    arg[2] = ncmd;
+		    arg[3] = NULL;
+		    *--s = '\0';
+		    io = popen_pipe_spawn(aTHX_ PL_cshname, &ppipe, arg);
+		    *s = '\'';
+		    goto leave;
+		}
+	    }
+	}
+    }
+#endif /* CSH */
+
+    /* see if there are shell metacharacters in it */
+
+    if (*cmd == '.' && isSPACE(cmd[1]))
+	goto doshell;
+
+    if (strBEGINs(cmd,"exec") && isSPACE(cmd[4]))
+	goto doshell;
+
+    s = cmd;
+    while (isWORDCHAR(*s))
+	s++;	/* catch VAR=val gizmo */
+    if (*s == '=')
+	goto doshell;
+
+    for (s = cmd; *s; s++) {
+	if (*s != ' ' && !isALPHA(*s) &&
+	    strchr("$&*(){}[]'\";\\|?<>~`\n",*s)) {
+	    if (*s == '\n' && !s[1]) {
+		*s = '\0';
+		break;
+	    }
+	    /* handle the 2>&1 construct at the end */
+	    if (*s == '>' && s[1] == '&' && s[2] == '1'
+		&& s > cmd + 1 && s[-1] == '2' && isSPACE(s[-2])
+		&& (!s[3] || isSPACE(s[3])))
+	    {
+		const char *t = s + 3;
+
+		while (*t && isSPACE(*t))
+		    ++t;
+		if (!*t) {
+		    err = posix_spawn_file_actions_adddup2(&ppipe.fa, 1, 2);
+		    if (!err) { /* ENOMEM or EBADF are possible */
+			s[-2] = '\0';
+			break;
+		    }
+		}
+	    }
+	    if (!err) {
+	  doshell:
+		sh_arg[0] = "sh";
+		sh_arg[1] = "-c";
+		sh_arg[2] = (const char *)cmd;
+		sh_arg[3] = NULL;
+		io = popen_pipe_spawn(aTHX_ PL_sh_path, &ppipe, sh_arg);
+		goto leave;
+	    }
+	}
+    }
+
+    Newx(argv, (s - cmd) / 2 + 2, const char*);
+    SAVEFREEPV(argv);
+    cmd = savepvn(cmd, s - cmd);
+    SAVEFREEPV(cmd);
+    a = argv;
+    for (s = cmd; *s;) {
+	while (isSPACE(*s))
+	    s++;
+	if (*s)
+	    *(a++) = s;
+	while (*s && !isSPACE(*s))
+	    s++;
+	if (*s)
+	    *s++ = '\0';
+    }
+    *a = NULL;
+    if (argv[0]) {
+	io = popen_pipe_spawn(aTHX_ argv[0], &ppipe, argv);
+
+	if (!io && errno == ENOEXEC)	/* for system V NIH syndrome */
+	    goto doshell;
+    }
+leave:
+    LEAVE;
+
+    if (!io)
+	popen_pipe_abort(aTHX_ &ppipe);
+
+    return io;
+}
+#endif /* USE_POSIX_SPAWN */
+
 PerlIO *
 Perl_my_popen_list(pTHX_ const char *mode, int n, SV **args)
 {
-#if (!defined(DOSISH) || defined(HAS_FORK)) && !defined(OS2) && !defined(VMS) && !defined(NETWARE) && !defined(__LIBCATAMOUNT__) && !defined(__amigaos4__)
+#if defined(USE_POSIX_SPAWN)
+    return do_posix_spawn_popen_list(aTHX_ mode, n, args);
+#elif (!defined(DOSISH) || defined(HAS_FORK)) && !defined(OS2) && \
+    !defined(VMS) && !defined(NETWARE) && !defined(__LIBCATAMOUNT__) \
+    && !defined(__amigaos4__)
     int p[2];
     I32 This, that;
     Pid_t pid;
@@ -2414,10 +2858,70 @@ Perl_my_popen_list(pTHX_ const char *mode, int n, SV **args)
 #endif
 }
 
-    /* VMS' my_popen() is in VMS.c, same with OS/2 and AmigaOS 4. */
-#if (!defined(DOSISH) || defined(HAS_FORK)) && !defined(VMS) && !defined(__LIBCATAMOUNT__) && !defined(__amigaos4__)
 PerlIO *
 Perl_my_popen(pTHX_ const char *cmd, const char *mode)
+#if defined(USE_POSIX_SPAWN)
+{
+    const I32 doexec = !(*cmd == '-' && cmd[1] == '\0');
+    int p[2];
+    Pid_t pid;
+    I32 This = (*mode == 'w');
+    I32 that = !This;
+
+    PERL_ARGS_ASSERT_MY_POPEN;
+    PERL_FLUSHALL_FOR_CHILD;
+
+    if (doexec)
+	return do_posix_spawn_popen(aTHX_ cmd, mode);
+
+    /* for `open(FH, "|-")' or `open(FH, "-|") */
+    if (PerlProc_pipe_cloexec(p) < 0)
+	return NULL;
+    while ((pid = PerlProc_fork()) < 0) {
+	if (errno != EAGAIN) {
+	    PerlLIO_close(p[This]);
+	    PerlLIO_close(p[that]);
+	    Perl_croak(aTHX_ "Can't fork: %s", Strerror(errno));
+	    return NULL;
+	}
+	Perl_ck_warner(aTHX_ packWARN(WARN_PIPE),
+			"Can't fork, trying again in 5 seconds");
+	sleep(5);
+    }
+    if (pid == 0) {
+#undef THIS
+#undef THAT
+#define THIS that
+#define THAT This
+	if (p[THIS] != (*mode == 'r')) {
+	    PerlLIO_dup2(p[THIS], *mode == 'r');
+	    PerlLIO_close(p[THIS]);
+	    if (p[THAT] != (*mode == 'r'))	/* if dup2() didn't close it */
+		PerlLIO_close(p[THAT]);
+	}
+	else {
+	    setfd_cloexec_or_inhexec_by_sysfdness(p[THIS]);
+	    PerlLIO_close(p[THAT]);
+	}
+#ifdef PERLIO_USING_CRLF
+	/* Since we circumvent IO layers when we manipulate low-level
+	  filedescriptors directly, need to manually switch to the
+	  default, binary, low-level mode; see PerlIOBuf_open(). */
+	PerlLIO_setmode((*mode == 'r'), O_BINARY);
+#endif
+	PL_forkprocess = 0;
+#ifdef PERL_USES_PL_PIDSTATUS
+	hv_clear(PL_pidstatus);	/* we have no children */
+#endif
+	return NULL;
+#undef THIS
+#undef THAT
+    }
+    return one_io_from_pipe(aTHX_ mode, p, pid);
+}
+    /* VMS' my_popen() is in VMS.c, same with OS/2 and AmigaOS 4. */
+#elif (!defined(DOSISH) || defined(HAS_FORK)) && !defined(VMS) && \
+	!defined(__LIBCATAMOUNT__) && !defined(__amigaos4__)
 {
     int p[2];
     I32 This, that;
