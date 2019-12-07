@@ -4302,6 +4302,283 @@ PP(pp_waitpid)
 #endif
 }
 
+/* TODO: fix Configure to detect this correctly */
+#if defined(__GLIBC__) || defined(__FreeBSD__)
+#  define USE_POSIX_SPAWN 1
+#  include <spawn.h>
+
+/* in util.c: */
+int
+Perl_do_posix_spawnp_sh(Pid_t *, const char *file,
+			const posix_spawn_file_actions_t *,
+			const posix_spawnattr_t *,
+			const char **argv);
+#endif /* posix_spawn */
+
+#ifdef USE_POSIX_SPAWN
+static int
+do_posix_spawn_wait(pTHX_ const posix_spawn_file_actions_t *fa,
+		    const char *file, const char **argv)
+{
+    Pid_t pid;
+    posix_spawnattr_t attr;
+    int err, result, status;
+    int flags = POSIX_SPAWN_SETSIGMASK;
+    sigset_t newset, oldset;
+    Sigsave_t ihand, qhand; /* place to save signals during system() */
+
+    err = posix_spawnattr_init(&attr);
+    if (err)
+	return err; /* ENOMEM */
+
+    posix_spawnattr_setflags(&attr, flags);
+    sigemptyset(&newset);
+    sigaddset(&newset, SIGCHLD);
+
+    /* child process will have oldset restored */
+    sigprocmask(SIG_BLOCK, &newset, &oldset);
+    posix_spawnattr_setsigmask(&attr, &oldset);
+    PERL_FPU_PRE_EXEC
+
+again:
+    err = posix_spawnp(&pid, file, fa, &attr, EXEC_ARGV_CAST(argv), environ);
+
+    if (err) {
+	if (err == EAGAIN) {
+	    Perl_ck_warner(aTHX_ packWARN(WARN_PIPE),
+			    "Can't fork, trying again in 5 seconds");
+	    sleep(5);
+	    goto again;
+	}
+	if (err == ENOEXEC)
+	    err = Perl_do_posix_spawnp_sh(&pid, file, fa, &attr, argv);
+	if (err) {
+	    if (ckWARN(WARN_EXEC))
+		Perl_warner(aTHX_ packWARN(WARN_EXEC), "Can't exec \"%s\": %s",
+			    file, Strerror(err));
+	    SETERRNO(err, RMS_FNF);
+	    err = -1;
+	}
+    }
+    if (!err) {
+	rsignal_save(SIGINT, (Sighandler_t)SIG_IGN, &ihand);
+	rsignal_save(SIGQUIT, (Sighandler_t)SIG_IGN, &qhand);
+	do {
+	    result = wait4pid(pid, &status, 0);
+	} while (result == -1 && errno == EINTR);
+	err = result == -1 ? -1 : status;
+	(void)rsignal_restore(SIGINT, &ihand);
+	(void)rsignal_restore(SIGQUIT, &qhand);
+    }
+    PERL_FPU_POST_EXEC
+    sigprocmask(SIG_SETMASK, &oldset, NULL);
+    posix_spawnattr_destroy(&attr);
+
+    return err;
+}
+
+static int
+do_aspawn_posix(pTHX_ void *vreally, void **vmark, void **vsp)
+{
+    SV *really = (SV *)vreally;
+    SV **mark = (SV **)vmark;
+    SV **sp = (SV **)vsp;
+    int err;
+
+    assert(sp >= mark);
+    ENTER;
+    {
+	const char **argv, **a;
+	const char *tmps = NULL;
+	const posix_spawn_file_actions_t *fa = NULL;
+
+	Newx(argv, sp - mark + 1, const char*);
+	SAVEFREEPV(argv);
+	a = argv;
+
+	while (++mark <= sp) {
+	    if (*mark)
+		*a++ = SvPV_nolen(*mark);
+	    else
+		*a++ = "";
+	}
+	*a = NULL;
+	if (really) {
+	    tmps = savepv(SvPV_nolen_const(really));
+	    SAVEFREEPV(tmps);
+	}
+	if ((!really && argv[0] && *argv[0] != '/') ||
+	    (really && *tmps != '/'))		/* will execvp use PATH? */
+	    TAINT_ENV(); /* testing IFS here is overkill, probably */
+
+	if (really && *tmps) {
+	    err = do_posix_spawn_wait(aTHX_ fa, tmps, argv);
+	} else if (argv[0]) {
+	    err = do_posix_spawn_wait(aTHX_ fa, argv[0], argv);
+	} else {
+	    err = ENOENT;
+	}
+    }
+    LEAVE;
+
+    return err;
+}
+
+static int
+do_spawn_posix(pTHX_ char *incmd)
+{
+    dVAR;
+    const char *sh_arg[4];
+    const char **argv, **a;
+    char *s;
+    char *buf;
+    char *cmd;
+    /* Make a copy so we can change it */
+    const Size_t cmdlen = strlen(incmd) + 1;
+    posix_spawn_file_actions_t *fa = NULL;
+    posix_spawn_file_actions_t file_actions;
+    int err = 0;
+
+    /* lots of duplicated code from Perl_do_exec3 */
+    ENTER;
+    Newx(buf, cmdlen, char);
+    SAVEFREEPV(buf);
+    cmd = buf;
+    memcpy(cmd, incmd, cmdlen);
+
+    while (*cmd && isSPACE(*cmd))
+	cmd++;
+
+    /* save an extra exec if possible */
+#ifdef CSH
+    {
+#define PERL_FLAGS_MAX 10
+	char flags[PERL_FLAGS_MAX];
+	if (strnEQ(cmd, PL_cshname, PL_cshlen) &&
+		strBEGINs(cmd + PL_cshlen, " -c")) {
+	    my_strlcpy(flags, "-c", PERL_FLAGS_MAX);
+	    s = cmd + PL_cshlen + 3;
+	    if (*s == 'f') {
+		s++;
+		my_strlcat(flags, "f", PERL_FLAGS_MAX - 2);
+	    }
+	    if (*s == ' ')
+		  s++;
+	    if (*s++ == '\'') {
+		char * const ncmd = s;
+
+		while (*s)
+		    s++;
+		if (s[-1] == '\n')
+		    *--s = '\0';
+		if (s[-1] == '\'') {
+		    const char *arg[4];
+		    arg[0] = "csh";
+		    arg[1] = flags;
+		    arg[2] = ncmd;
+		    arg[3] = NULL;
+		    *--s = '\0';
+		    err = do_posix_spawn_wait(aTHX_ fa, PL_cshname, arg);
+		    *s = '\'';
+		    goto leave;
+		}
+	    }
+	}
+    }
+#endif /* CSH */
+
+    /* see if there are shell metacharacters in it */
+
+    if (*cmd == '.' && isSPACE(cmd[1]))
+	goto doshell;
+
+    if (strBEGINs(cmd, "exec") && isSPACE(cmd[4]))
+	goto doshell;
+
+    s = cmd;
+    while (isWORDCHAR(*s))
+	s++;	/* catch VAR=val gizmo */
+    if (*s == '=')
+	goto doshell;
+
+    for (s = cmd; *s && !err; s++) {
+	if (*s != ' ' && !isALPHA(*s) &&
+	    strchr("$&*(){}[]'\";\\|?<>~`\n",*s)) {
+	    if (*s == '\n' && !s[1]) {
+		*s = '\0';
+		break;
+	    }
+	    /* handle the 2>&1 construct at the end */
+	    if (*s == '>' && s[1] == '&' && s[2] == '1'
+		&& s > cmd + 1 && s[-1] == '2' && isSPACE(s[-2])
+		&& (!s[3] || isSPACE(s[3])))
+	    {
+                const char *t = s + 3;
+
+		while (*t && isSPACE(*t))
+		    ++t;
+		if (!*t) {
+		    if (!fa) {
+			err = posix_spawn_file_actions_init(&file_actions);
+			if (!err)
+			    fa = &file_actions;
+		    }
+		    if (fa && !err) {
+			err = posix_spawn_file_actions_adddup2(fa, 1, 2);
+			if (!err) {
+			    s[-2] = '\0';
+			    break;
+			}
+		    }
+		}
+	    }
+	    if (!err) {
+	  doshell:
+		sh_arg[0] = "sh";
+		sh_arg[1] = "-c";
+		sh_arg[2] = (const char *)cmd;
+		sh_arg[3] = NULL;
+		err = do_posix_spawn_wait(aTHX_ fa, PL_sh_path, sh_arg);
+		goto leave;
+	    }
+	}
+    }
+
+    Newx(argv, (s - cmd) / 2 + 2, const char*);
+    SAVEFREEPV(argv);
+    cmd = savepvn(cmd, s - cmd);
+    SAVEFREEPV(cmd);
+    a = argv;
+    for (s = cmd; *s;) {
+	while (isSPACE(*s))
+	    s++;
+	if (*s)
+	    *(a++) = s;
+	while (*s && !isSPACE(*s))
+	    s++;
+	if (*s)
+	    *s++ = '\0';
+    }
+    *a = NULL;
+    if (argv[0]) {
+	err = do_posix_spawn_wait(aTHX_ fa, argv[0], argv);
+
+	if (err == ENOEXEC)		/* for system V NIH syndrome */
+	    goto doshell;
+    }
+leave:
+    LEAVE;
+
+    if (fa)
+	posix_spawn_file_actions_destroy(fa);
+
+    return err;
+}
+
+#  define do_aspawn(a,b,c) do_aspawn_posix(aTHX_ a, b, c)
+#  define do_spawn(a) do_spawn_posix(aTHX_ a)
+#endif /* USE_POSIX_SPAWN */
+
 PP(pp_system)
 {
     dSP; dMARK; dORIGMARK; dTARGET;
@@ -4359,7 +4636,8 @@ PP(pp_system)
 	TAINT_PROPER("system");
     }
     PERL_FLUSHALL_FOR_CHILD;
-#if (defined(HAS_FORK) || defined(__amigaos4__)) && !defined(VMS) && !defined(OS2) || defined(PERL_MICRO)
+#if !defined(USE_POSIX_SPAWN) && (defined(HAS_FORK) || defined(__amigaos4__)) \
+	&& !defined(VMS) && !defined(OS2) || defined(PERL_MICRO)
     {
 #ifdef __amigaos4__
         struct UserData userdata;
