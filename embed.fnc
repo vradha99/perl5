@@ -286,10 +286,11 @@
 :      programs, such as Devel::PPPort.
 :
 :   I  This flag works exactly the same as 'i' but it also adds
-:      __attribute__(always_inline) or __forceinline if either of them is
+:      __attribute__((always_inline)) or __forceinline if either of them is
 :      supported by the compiler.
 :
-:         proto.h: function is declared as PERL_STATIC_FORCE_INLINE
+:         proto.h: function is declared as PERL_STATIC_FORCE_INLINE and
+:                  __attribute__always_inline__ is added
 :
 :   i  inline static.  This is used for functions that the compiler is being
 :      requested to inline.  If the function is in a header file its
