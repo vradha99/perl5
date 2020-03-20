@@ -60,7 +60,7 @@
 /* If the environment says to, we can output debugging information during
  * initialization.  This is done before option parsing, and before any thread
  * creation, so can be a file-level static */
-#if ! defined(DEBUGGING) || defined(PERL_GLOBAL_STRUCT)
+#if ! defined(DEBUGGING)
 #  define debug_initialization 0
 #  define DEBUG_INITIALIZATION_set(v)
 #else
@@ -4947,64 +4947,6 @@ Perl__is_cur_LC_category_utf8(pTHX_ int category)
 
 #    endif
 
-#    if 0 && defined(USE_LOCALE_MESSAGES) && defined(HAS_SYS_ERRLIST)
-
-    /* This code is ifdefd out because it was found to not be necessary in testing
-     * on our dromedary test machine, which has over 700 locales.  There, this
-     * added no value to looking at the currency symbol and the time strings.  I
-     * left it in so as to avoid rewriting it if real-world experience indicates
-     * that dromedary is an outlier.  Essentially, instead of returning abpve if we
-     * haven't found illegal utf8, we continue on and examine all the strerror()
-     * messages on the platform for utf8ness.  If all are ASCII, we still don't
-     * know the answer; but otherwise we have a pretty good indication of the
-     * utf8ness.  The reason this doesn't help much is that the messages may not
-     * have been translated into the locale.  The currency symbol and time strings
-     * are much more likely to have been translated.  */
-        {
-            int e;
-            bool non_ascii = FALSE;
-            const char *original_messages_locale
-                            = switch_category_locale_to_template(LC_MESSAGES,
-                                                                 category,
-                                                                 save_input_locale);
-            const char * errmsg = NULL;
-
-            /* Here the current LC_MESSAGES is set to the locale of the category
-             * whose information is desired.  Look through all the messages.  We
-             * can't use Strerror() here because it may expand to code that
-             * segfaults in miniperl */
-
-            for (e = 0; e <= sys_nerr; e++) {
-                errno = 0;
-                errmsg = sys_errlist[e];
-                if (errno || !errmsg) {
-                    break;
-                }
-                errmsg = savepv(errmsg);
-                if (! is_utf8_invariant_string((U8 *) errmsg, 0)) {
-                    non_ascii = TRUE;
-                    is_utf8 = is_utf8_string((U8 *) errmsg, 0);
-                    break;
-                }
-            }
-            Safefree(errmsg);
-
-            restore_switched_locale(LC_MESSAGES, original_messages_locale);
-
-            if (non_ascii) {
-
-                /* Any non-UTF-8 message means not a UTF-8 locale; if all are valid,
-                 * any non-ascii means it is one; otherwise we assume it isn't */
-                DEBUG_Lv(PerlIO_printf(Perl_debug_log, "\t?error messages for %s are UTF-8=%d\n",
-                                    save_input_locale,
-                                    is_utf8));
-                goto finish_and_return;
-            }
-
-            DEBUG_L(PerlIO_printf(Perl_debug_log, "All error messages for %s contain only ASCII; can't use for determining if UTF-8 locale\n", save_input_locale));
-        }
-
-#    endif
 #    ifndef EBCDIC  /* On os390, even if the name ends with "UTF-8', it isn't a
                    UTF-8 locale */
 
@@ -5598,11 +5540,7 @@ S_setlocale_debug_string(const int category,        /* category number,
      * be overwritten by the next call, so this should be used just to
      * formulate a string to immediately print or savepv() on. */
 
-    /* initialise to a non-null value to keep it out of BSS and so keep
-     * -DPERL_GLOBAL_STRUCT_PRIVATE happy */
-    static char ret[256] = "If you can read this, thank your buggy C"
-                           " library strlcpy(), and change your hints file"
-                           " to undef it";
+    static char ret[256];
 
     my_strlcpy(ret, "setlocale(", sizeof(ret));
     my_strlcat(ret, category_name(category), sizeof(ret));

@@ -1610,9 +1610,6 @@ perl_fini(void)
 {
     dVAR;
     if (
-#ifdef PERL_GLOBAL_STRUCT_PRIVATE
-        my_vars &&
-#endif
         PL_curinterp && !PL_veto_cleanup)
 	FREE_THREAD_KEY;
 }

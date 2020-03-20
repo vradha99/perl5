@@ -27,7 +27,6 @@ jobs:
             CONFIGURE_ARGS:
               - "-Uusethreads"
               - "-Dusethreads"
-              - "-DPERL_GLOBAL_STRUCT_PRIVATE"
               - "-Duseshrplib -Dusesitecustomize -Duselongdouble PERL_UNICODE='' LANG='en_US.UTF-8'"
               - "-Duseshrplib -Dusequadmath -Dusecbacktrace -Dusethreads PERL_UNICODE='' LANG='de_DE.UTF-8'"
               - "-Duserelocatableinc"
