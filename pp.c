@@ -4019,7 +4019,6 @@ PP(pp_ucfirst)
 
 PP(pp_uc)
 {
-    dVAR;
     dSP;
     SV *source = TOPs;
     STRLEN len;
@@ -6632,7 +6631,7 @@ PP(pp_coreargs)
 
 PP(pp_avhvswitch)
 {
-    dVAR; dSP;
+    dSP;
     return PL_ppaddr[
 		(SvTYPE(TOPs) == SVt_PVAV ? OP_AEACH : OP_EACH)
 		    + (PL_op->op_private & OPpAVHVSWITCH_MASK)

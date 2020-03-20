@@ -1017,7 +1017,6 @@ function is more convenient.
 void
 Perl_lex_stuff_pvn(pTHX_ const char *pv, STRLEN len, U32 flags)
 {
-    dVAR;
     char *bufptr;
     PERL_ARGS_ASSERT_LEX_STUFF_PVN;
     if (flags & ~(LEX_STUFF_UTF8))
@@ -1449,7 +1448,6 @@ is encountered, an exception is generated.
 I32
 Perl_lex_peek_unichar(pTHX_ U32 flags)
 {
-    dVAR;
     char *s, *bufend;
     if (flags & ~(LEX_KEEP_PREVIOUS))
 	Perl_croak(aTHX_ "Lexing code internal error (%s)", "lex_peek_unichar");
@@ -2701,7 +2699,6 @@ Perl_get_and_check_backslash_N_name(pTHX_ const char* s,
     const char* context = s - 3;
     STRLEN context_len = e - context + 1; /* include all of \N{...} */
 
-    dVAR;
 
     PERL_ARGS_ASSERT_GET_AND_CHECK_BACKSLASH_N_NAME;
 
@@ -7115,7 +7112,6 @@ yyl_fake_eof(pTHX_ U32 fake_eof, bool bof, char *s, STRLEN len)
                 && !instr(s,"indir")
                 && instr(PL_origargv[0],"perl"))
             {
-                dVAR;
                 char **newargv;
 
                 *ipathend = '\0';
@@ -8505,7 +8501,6 @@ yyl_key_core(pTHX_ char *s, STRLEN len, struct code c)
 static int
 yyl_keylookup(pTHX_ char *s, GV *gv)
 {
-    dVAR;
     STRLEN len;
     bool anydelim;
     I32 key;
@@ -9154,7 +9149,6 @@ yyl_try(pTHX_ char *s, STRLEN len)
 int
 Perl_yylex(pTHX)
 {
-    dVAR;
     char *s = PL_bufptr;
 
     if (UNLIKELY(PL_parser->recheck_utf8_validity)) {
@@ -12758,7 +12752,6 @@ void
 Perl_wrap_keyword_plugin(pTHX_
     Perl_keyword_plugin_t new_plugin, Perl_keyword_plugin_t *old_plugin_p)
 {
-    dVAR;
 
     PERL_UNUSED_CONTEXT;
     PERL_ARGS_ASSERT_WRAP_KEYWORD_PLUGIN;
