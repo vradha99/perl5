@@ -6969,7 +6969,7 @@ S_expands(UV t_cp, UV t_cp_end, UV r_cp, UV r_cp_end)
     /* On ASCII platforms, the lengths needed to represent code points in UTF-8
      * are monotonically increasing with code point.  Thus if the final code
      * point in the t range is not greater than the corresponding final code
-     * point in the r range, there is no growth */
+     * point in the r range, nothing in the range grows */
     PERL_UNUSED_ARG(t_cp);
     PERL_UNUSED_ARG(r_cp);
 
