@@ -13566,7 +13566,6 @@ S_regatom(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth)
                  * /\A/ from /^/ in split. */
                 FLAGS(REGNODE_p(ret)) = 1;
             }
-	    *flagp |= SIMPLE;
 	    goto finish_meta_pat;
 	case 'G':
             if (RExC_pm_flags & PMf_WILDCARD) {
@@ -13579,13 +13578,11 @@ S_regatom(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth)
             }
 	    ret = reg_node(pRExC_state, GPOS);
             RExC_seen |= REG_GPOS_SEEN;
-	    *flagp |= SIMPLE;
 	    goto finish_meta_pat;
 	case 'K':
             if (!RExC_in_lookbehind && !RExC_in_lookahead) {
                 RExC_seen_zerolen++;
                 ret = reg_node(pRExC_state, KEEPS);
-                *flagp |= SIMPLE;
                 /* XXX:dmq : disabling in-place substitution seems to
                  * be necessary here to avoid cases of memory corruption, as
                  * with: C<$_="x" x 80; s/x\K/y/> -- rgs
@@ -13605,7 +13602,6 @@ S_regatom(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth)
             else {
                 ret = reg_node(pRExC_state, SEOL);
             }
-	    *flagp |= SIMPLE;
 	    RExC_seen_zerolen++;		/* Do not optimize RE away */
 	    goto finish_meta_pat;
 	case 'z':
@@ -13616,7 +13612,6 @@ S_regatom(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth)
             else {
                 ret = reg_node(pRExC_state, EOS);
             }
-	    *flagp |= SIMPLE;
 	    RExC_seen_zerolen++;		/* Do not optimize RE away */
 	    goto finish_meta_pat;
 	case 'C':
@@ -13738,8 +13733,6 @@ S_regatom(pTHX_ RExC_state_t *pRExC_state, I32 *flagp, U32 depth)
 
 	    ret = reg_node(pRExC_state, op);
             FLAGS(REGNODE_p(ret)) = flags;
-
-	    *flagp |= SIMPLE;
 
 	    goto finish_meta_pat;
           }
