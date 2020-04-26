@@ -674,32 +674,97 @@ such occurrence.
 char *
 Perl_rninstr(const char *big, const char *bigend, const char *little, const char *lend)
 {
-    const char *bigbeg;
-    const I32 first = *little;
-    const char * const littleend = lend;
+    const char first = *little;
+    const Ptrdiff_t little_len = lend - little;
+    const Ptrdiff_t big_len = bigend - big;
+    char * cur;
 
     PERL_ARGS_ASSERT_RNINSTR;
 
-    if (little >= littleend)
+    if (UNLIKELY(little_len <= 0)) {
 	return (char*)bigend;
-    bigbeg = big;
-    big = bigend - (littleend - little++);
-    while (big >= bigbeg) {
-	const char *s, *x;
-	if (*big-- != first)
-	    continue;
-	for (x=big+2,s=little; s < littleend; /**/ ) {
-	    if (*s != *x)
-		break;
-	    else {
-		x++;
-		s++;
-	    }
-	}
-	if (s >= littleend)
-	    return (char*)(big+1);
     }
-    return NULL;
+    if (UNLIKELY(little_len > big_len)) {
+        return NULL;
+    }
+
+#ifdef HAS_MEMRCHR
+
+    if (little_len == 1) {
+        return (char *) memrchr(big, first, big_len);
+    }
+    else {
+        /* 'little' excluding the first character; avoids comparing the same
+         * location twice */
+        const char * rest = little + 1;
+        const Ptrdiff_t rest_len = lend - rest;
+
+        /* Can't start a match that's too close to the right edge */
+        cur = (char *) bigend - little_len + 1;
+
+        do {
+            cur = (char *) memrchr(big, first, cur - big);
+            if (cur == NULL) {
+                return NULL;
+            }
+
+            /* We already know there is a match at *cur; check the rest */
+            if memEQ(cur + 1, rest, rest_len) {
+                return cur;
+            }
+        } while (cur >= big);
+
+        return NULL;
+    }
+
+#else
+    /* Note: One could do this on a per-word basis similar to
+     * S_find_next_masked( or S_find_span_end() */
+
+    cur = (char *) bigend - 1;  /* Start at the right edge */
+    if (little_len == 1) {  /* Special case length 1 */
+        do {
+            if (*cur == first) {
+                return cur;
+            }
+        } while (--cur >= big);
+
+        return NULL;
+    }
+    else {
+        char final = little[little_len-1];  /* The last byte in 'little' */
+
+        /* Can't start too close to the left edge */
+        const char * first_matchable_big = big + little_len - 1;
+
+        do {
+            if (*cur == final) {    /* Found the final 'little' byte */
+                SSize_t i;
+
+                /* This is where the first byte of 'little' would match in
+                 * 'big' */
+                char *this_big_first = cur - little_len + 1;
+
+                /* Look backwards in 'big' for the remaining bytes in 'little'
+                 * */
+                for (i = little_len - 2; i >= 0; i--) {
+                    if (little[i] != this_big_first[i]) {
+                        goto didnt_match;
+                    }
+                }
+                
+                return this_big_first;
+            }
+
+          didnt_match: ;
+
+        } while (--cur >= first_matchable_big); /* Try again */
+
+        return NULL;
+    }
+
+#endif
+
 }
 
 /* As a space optimization, we do not compile tables for strings of length
