@@ -305,6 +305,15 @@ EOP
                 -$width, $alias, $node->{id}, $node->{id}, "type alias";
         }
     }
+    print $out "\t/* -- For regexec.c to switch on target being utf8 or not -- */\n";
+    for my $node (@ops) {
+        my $id = 2 * $node->{id};
+        printf $out $format,
+            -$width, "$node->{name}_non_utf8", $id, $id, "";
+        $id++;
+        printf $out $format,
+            -$width, "$node->{name}_utf8", $id, $id, "";
+    }
 
     print $out "\t/* ------------ States ------------- */\n";
     for my $node (@states) {
