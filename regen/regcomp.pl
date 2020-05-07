@@ -306,13 +306,14 @@ EOP
         }
     }
     print $out "\t/* -- For regexec.c to switch on target being utf8 or not -- */\n";
+    print $out "\n#define withUTF8ness(op, utf8) (((op) << 1) + utf8)\n\n";
     for my $node (@ops) {
         my $id = 2 * $node->{id};
         printf $out $format,
             -$width, "$node->{name}_non_utf8", $id, $id, "";
         $id++;
         printf $out $format,
-            -$width, "$node->{name}_utf8", $id, $id, "";
+            -$width, "$node->{name}_for_utf8", $id, $id, "";
     }
 
     print $out "\t/* ------------ States ------------- */\n";
