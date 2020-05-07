@@ -9497,12 +9497,7 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	    scan = this_eol;
 	break;
 
-    case LEXACT_REQ8_non_utf8:
-            break;
-
     case LEXACT_REQ8_utf8:
-        /* FALLTHROUGH */
-
     case LEXACT_utf8: case LEXACT_non_utf8:
       {
         U8 * string;
@@ -9523,11 +9518,7 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
         }
         goto do_exact;
 
-    case EXACT_REQ8_non_utf8:
-            break;
-
     case EXACT_REQ8_utf8:
-        /* FALLTHROUGH */
     case EXACT_utf8: case EXACT_non_utf8:
       do_exact:
 	string = (U8 *) STRINGs(p);
@@ -9618,16 +9609,10 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
         assert(! reginfo->is_utf8_pat);
         goto do_exactf;
 
-      case EXACTFLU8_non_utf8:
-            break;
-
       case EXACTFLU8_utf8:
         utf8_flags =  FOLDEQ_LOCALE | FOLDEQ_S2_ALREADY_FOLDED
                                     | FOLDEQ_S2_FOLDS_SANE;
         goto do_exactf;
-
-    case EXACTFU_REQ8_non_utf8:
-            break;
 
     case EXACTFU_REQ8_utf8:
 	assert(reginfo->is_utf8_pat);
@@ -9797,9 +9782,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
             }
         break;
 
-    case ANYOFH_non_utf8:
-        break;
-
     case ANYOFHb_utf8:
             /* we know the first byte must be the FLAGS field */
             while (   hardcount < max
@@ -9811,9 +9793,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
                 scan += UTF8SKIP(scan);
                 hardcount++;
             }
-        break;
-
-    case ANYOFHb_non_utf8:
         break;
 
     case ANYOFHr_utf8:
@@ -9830,9 +9809,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
             }
         break;
 
-    case ANYOFHr_non_utf8:
-        break;
-
     case ANYOFHs_utf8:
             while (   hardcount < max
                    && scan + FLAGS(p) < this_eol
@@ -9842,9 +9818,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
                 scan += UTF8SKIP(scan);
                 hardcount++;
             }
-        break;
-
-      case ANYOFHs_non_utf8:
         break;
 
     case ANYOFR_utf8:
@@ -9911,8 +9884,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	break;
 
     case POSIXD_non_utf8:
-        /* FALLTHROUGH */
-
     case POSIXA_non_utf8:
         while (scan < this_eol && _generic_isCC_A((U8) *scan, FLAGS(p))) {
 	    scan++;
@@ -9920,8 +9891,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	break;
 
     case NPOSIXD_non_utf8:
-        /* FALLTHROUGH */
-
     case NPOSIXA_non_utf8:
             while (scan < this_eol && ! _generic_isCC_A((U8) *scan, FLAGS(p))) {
                 scan++;
@@ -9955,9 +9924,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	    }
 	break;
 
-    case POSIXD_utf8:
-            goto utf8_posix;
-
     case POSIXA_utf8:
         if (this_eol - scan > max) {
 
@@ -9970,10 +9936,6 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	    scan++;
 	}
 	break;
-
-    case NPOSIXD_utf8:
-            to_complement = 1;
-            goto utf8_posix;
 
     case NPOSIXA_utf8:
 
@@ -9988,12 +9950,13 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
 	    }
         break;
 
+    case NPOSIXD_utf8:
     case NPOSIXU_utf8:
         to_complement = 1;
         /* FALLTHROUGH */
 
+    case POSIXD_utf8:
     case POSIXU_utf8:
-          utf8_posix:
             classnum = (_char_class_number) FLAGS(p);
             switch (classnum) {
                 default:
@@ -10090,6 +10053,16 @@ S_regrepeat(pTHX_ regexp *prog, char **startposp, const regnode *p,
     case NBOUNDL_utf8: case NBOUNDL_non_utf8:
         _CHECK_AND_WARN_PROBLEMATIC_LOCALE;
         /* FALLTHROUGH */
+
+      case EXACTFLU8_non_utf8:     /* These require a UTF-8 pattern */
+      case EXACT_REQ8_non_utf8:
+      case EXACTFU_REQ8_non_utf8:
+      case LEXACT_REQ8_non_utf8:
+      case ANYOFH_non_utf8:
+      case ANYOFHb_non_utf8:
+      case ANYOFHr_non_utf8:
+      case ANYOFHs_non_utf8:
+
     case BOUND_utf8: case BOUND_non_utf8:
     case BOUNDA_utf8: case BOUNDA_non_utf8:
     case BOUNDU_utf8: case BOUNDU_non_utf8:
