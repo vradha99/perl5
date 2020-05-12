@@ -16466,7 +16466,7 @@ redo_curchar:
                            /* If more than a single node returned, the nested
                             * parens evaluated to more than just a (?[...]),
                             * which isn't legal */
-                        || node != 1) {
+                        || RExC_emit != 1 + 4) {
                         vFAIL("Expecting interpolated extended charclass");
                     }
                     resultant_invlist = (SV *) ARGp(REGNODE_p(node));
